@@ -1,3 +1,6 @@
+// Coridyn: include full jsondiff so we can apply text-diff patches to construct RHS data
+var jsondiffpatch = require('../main-full');
+
 var base = require('./base');
 var BaseFormatter = base.BaseFormatter;
 
@@ -28,32 +31,148 @@ HtmlFormatter.prototype.formatValue = function(context, value) {
   context.out('<pre>' + htmlEscape(JSON.stringify(value, null, 2)) + '</pre>');
 };
 
-HtmlFormatter.prototype.formatTextDiffString = function(context, value) {
-  var lines = this.parseTextDiff(value);
+/*
+2017-05-01: New text diff behaviour that shows both left and right and the difference between them.
+*/
+HtmlFormatter.prototype.formatTextDiffString = function(context, delta, leftValue, rDelta, rightValue) {
+  var lines = this.parseTextDiff(delta);
   context.out('<ul class="jsondiffpatch-textdiff">');
-  for (var i = 0, l = lines.length; i < l; i++) {
-    var line = lines[i];
-    context.out('<li>' +
-      '<div class="jsondiffpatch-textdiff-location">' +
-      '<span class="jsondiffpatch-textdiff-line-number">' +
-      line.location.line +
-      '</span>' +
-      '<span class="jsondiffpatch-textdiff-char">' +
-      line.location.chr +
-      '</span>' +
-      '</div>' +
-      '<div class="jsondiffpatch-textdiff-line">');
-    var pieces = line.pieces;
-    for (var pieceIndex = 0, piecesLength = pieces.length; pieceIndex < piecesLength; pieceIndex++) {
-      /* global unescape */
-      var piece = pieces[pieceIndex];
-      context.out('<span class="jsondiffpatch-textdiff-' + piece.type + '">' +
-        htmlEscape(unescape(piece.text)) + '</span>');
-    }
-    context.out('</div></li>');
-  }
+  
+//   // Print out left and right values in their entirety
+//   context.out(
+// `<li>
+//     <div class="jsondiffpatch-textdiff-line">
+//         <span class="jsondiffpatch-textdiff-deleted">${htmlEscape(unescape(leftValue))}</span>
+//     </div>
+//     <div class="jsondiffpatch-textdiff-line">
+//         <span class="jsondiffpatch-textdiff-added">${htmlEscape(unescape(rightValue))}</span>
+//     </div>
+// </li>`
+//   );
+
+
+// Print out the annotated left
+let cleanLeft = inlineTextDiffString(lines, rightValue, 'deleted');
+context.out(`<li>
+    <div class="jsondiffpatch-textdiff-location">
+        <span class="jsondiffpatch-textdiff-char">
+            ${'left'}
+        </span>
+    </div>
+    <div class="jsondiffpatch-textdiff-line">${cleanLeft}</div>
+</li>`);
+  
+  // Print out the annotated right
+  let cleanRight = inlineTextDiffString(lines, rightValue, 'added');
+  context.out(`<li>
+      <div class="jsondiffpatch-textdiff-location">
+          <span class="jsondiffpatch-textdiff-char">
+              ${'right'}
+          </span>
+      </div>
+      <div class="jsondiffpatch-textdiff-line">${cleanRight}</div>
+</li>`);
+  
   context.out('</ul>');
 };
+
+
+/*
+2017-05-01
+Customise the text diff formatting to show the entire string on both left and right with the
+sections added/removed shown inline in the string.
+
+Makes it easier than just seeing the changed chunks out of context in a unified diff.
+*/
+function inlineTextDiffString(lines, rightValue, highlightType /*'added' | 'deleted'*/){
+    // let subOffset = highlightType === 'added' ? -1 : 1;
+    let subOffset = -1;
+    
+    // Use `right` for splitting.
+    let unescRight = unescape(rightValue);
+    
+    // Work in reverse from r-to-l so we don't mess up indicies later in the string.
+    let finalRight = lines.concat().reverse().reduce(
+        (baseString, line, i) => {
+            // `location.line` seems to be the starting position in the text string. Not sure what `location.chr` is
+            let startChar = parseInt(line.location.line, 10);
+            
+            // How far along in the current chunk.
+            let originalOffset = 0;
+            
+            let lineScore = 0;
+            let newLines = line.pieces.map((piece) => {
+                let startPos = startChar + originalOffset;
+                let pieceText = unescape(piece.text);
+                let pieceLength = pieceText.length;
+                
+                if (piece.type === 'context'){
+                    // Increment offset to skip over this piece
+                    originalOffset += pieceLength;
+                } else if (piece.type === highlightType){
+                    lineScore++;
+                    
+                    pieceText = `[z]${pieceText}[/z]`;
+                } else {
+                    // Ignore this change
+                    pieceText = null;
+                }
+                
+                // Add length of "added" text only - since we're working from RHS -> LHS
+                if (piece.type === 'added'){
+                    originalOffset += pieceLength;
+                }
+                
+                return pieceText;
+            }).filter(x => x);
+            
+            let newBase = baseString;
+            if (lineScore > 0){
+                newBase = [
+                    baseString.substr(0, startChar + subOffset),
+                    newLines.join(''),
+                    baseString.substr(startChar + originalOffset + subOffset)
+                ].join('');
+            }
+            
+            return newBase;
+        },
+        unescRight
+    );
+    
+    // Regexp match: [z](...)[/z] => <span class="">...</span>
+    let cleanRight = htmlEscape(finalRight).replace(/\[z\]/g, `<span class="jsondiffpatch-textdiff-${highlightType}">`).replace(/\[\/z\]/g, '</span>');
+    return cleanRight;
+}
+
+
+// // 2017-05-01: Original text diff formatter
+// HtmlFormatter.prototype.formatTextDiffString = function(context, value) {
+//   var lines = this.parseTextDiff(value);
+//   context.out('<ul class="jsondiffpatch-textdiff">');
+//   for (var i = 0, l = lines.length; i < l; i++) {
+//     var line = lines[i];
+//     context.out('<li>' +
+//       '<div class="jsondiffpatch-textdiff-location">' +
+//       '<span class="jsondiffpatch-textdiff-line-number">' +
+//       line.location.line +
+//       '</span>' +
+//       '<span class="jsondiffpatch-textdiff-char">' +
+//       line.location.chr +
+//       '</span>' +
+//       '</div>' +
+//       '<div class="jsondiffpatch-textdiff-line">');
+//     var pieces = line.pieces;
+//     for (var pieceIndex = 0, piecesLength = pieces.length; pieceIndex < piecesLength; pieceIndex++) {
+//       /* global unescape */
+//       var piece = pieces[pieceIndex];
+//       context.out('<span class="jsondiffpatch-textdiff-' + piece.type + '">' +
+//         htmlEscape(unescape(piece.text)) + '</span>');
+//     }
+//     context.out('</div></li>');
+//   }
+//   context.out('</ul>');
+// };
 
 var adjustArrows = function jsondiffpatchHtmlFormatterAdjustArrows(node) {
   node = node || document;
@@ -199,9 +318,12 @@ HtmlFormatter.prototype.format_moved = function(context, delta) {
   context.hasArrows = true;
 };
 
-HtmlFormatter.prototype.format_textdiff = function(context, delta) {
+HtmlFormatter.prototype.format_textdiff = function(context, delta, leftValue) {
+  var rightValue = jsondiffpatch.patch(leftValue, delta);
+  var rDelta = jsondiffpatch.reverse(delta);
+  
   context.out('<div class="jsondiffpatch-value">');
-  this.formatTextDiffString(context, delta[0]);
+  this.formatTextDiffString(context, delta[0], leftValue, rDelta[0], rightValue);
   context.out('</div>');
 };
 
