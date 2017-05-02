@@ -36,7 +36,7 @@ HtmlFormatter.prototype.formatValue = function(context, value) {
 */
 HtmlFormatter.prototype.formatTextDiffString = function(context, delta, leftValue, rDelta, rightValue) {
   var lines = this.parseTextDiff(delta);
-  context.out('<ul class="jsondiffpatch-textdiff">');
+  context.out('<ul class="jsondiffpatch-textdiff jsondiffpatch-textdiff--inline">');
   
 //   // Print out left and right values in their entirety
 //   context.out(
